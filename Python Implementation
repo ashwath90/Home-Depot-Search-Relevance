@@ -1,0 +1,166 @@
+#Natural Language Processing - Home Depot Kaggle Project
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import string
+import numpy as np
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import classification_report
+from sklearn.cross_validation import train_test_split
+from sklearn.pipeline import Pipeline
+
+#Read Input Files
+Train = pd.read_csv('train.csv',encoding ="ISO-8859-1")
+Test = pd.read_csv('test.csv',encoding ="ISO-8859-1")
+Prod_Desc = pd.read_csv('product_descriptions.csv',encoding ="ISO-8859-1")
+Prod_Attr = pd.read_csv('attributes.csv',encoding ="ISO-8859-1")
+Prod_Attr.head()
+
+# Add product description to Train set
+Train_all = pd.merge(Train,Prod_Desc,on='product_uid',how='left')
+Train_all.head()
+
+#Subset the class into an array and convert it to string 
+Relevance_Train = np.asarray(Train_all['relevance'],dtype="|S6")
+Test.head()
+
+# Some Statistics
+print(Train_all.head())
+print(Train_all.describe())
+print(Train_all.info())
+print(Train_all.groupby('relevance').count())
+
+#Creating some more features
+
+Train_all['length_pdt'] = Train_all['product_title'].apply(len)
+Train_all['length_st'] = Train_all['search_term'].apply(len)
+Train_all['length_desc'] = Train_all['product_description'].apply(len)
+
+print(Train_all.head())
+
+# Exploratory Data Analysis
+Histgram_pdt = Train_all['length_pdt'].plot(bins=50,kind='hist') # Normal
+Histgram_st = Train_all['length_st'].plot(bins=50,kind='hist',color='green') #Normal
+Histgram_desc = Train_all['length_desc'].plot(bins=100,kind='hist',color='purple') # left Skwed
+
+# Summary statistics for engineered column - length
+print(Train_all['length_pdt'].describe())
+print(Train_all['length_st'].describe())
+print(Train_all['length_desc'].describe())
+
+# Check the lenghtiest product title and search term individually
+print(Train[Train['length_pdt'] == 147]['product_title'])
+print(Train[Train['length_st'] == 60]['search_term'])
+
+# Histogram of relevance vs lenght of product title and search term
+print(Train_all.hist(column='length_pdt',by ='relevance',bins = 50, figsize=(15,6)))
+print(Train_all.hist(column='length_st',by ='relevance',bins = 50, figsize=(15,6)))
+print(Train_all.hist(column='length_desc',by ='relevance',bins = 100, figsize=(15,6)))
+
+Train_all.head()
+
+
+from datetime import datetime
+start = datetime.now()
+# Preprocessing text data
+from nltk.corpus import stopwords
+from stemming.porter2 import stem
+
+def textprocess(term):
+    #Perform Stemming
+    stemtxt = [stem(word) for word in term]
+    lowertxt = [word.lower() for word in stemtxt]
+    # Remove Punctuation
+    nopunc = [word for word in lowertxt if word not in string.punctuation]
+    nopunc = ''.join(nopunc)
+    #Remove stopwords
+    cleantxt = [word for word in nopunc.split() if word not in stopwords.words('english')]
+    return cleantxt
+
+start = datetime.now()    
+Train_all['product_title'] = Train_all['product_title'].map(lambda x:textprocess(x))
+Train_all['search_term'] = Train_all['search_term'].map(lambda x:textprocess(x))
+Train_all['product_description'] = Train_all['product_description'].map(lambda x:textprocess(x))
+print(datetime.now() - start)
+
+Train_all['prodtext'] = Train_all['product_title']+Train_all['search_term']+Train_all['product_description']
+
+#Reatin only unique words in prodtext
+Train_all.info()
+Train_all.head()
+Train_all['prodtext'] = pd.concat([Train_all['product_title'],Train_all['search_term'],Train_all['product_description']],ignore_index = True)
+
+#Check code
+clean_pdt = Train_all['prodtext'].head(5).apply(textprocess)
+print(clean_pdt)
+#
+#Model Development - bag of words
+#from sklearn.feature_extraction.text import CountVectorizer
+Count_vect = CountVectorizer()
+bow_transformer = Count_vect.fit(Train_all.prodtext)
+Train.head()
+Train_all['prodtext'] = Train_all['prodtext'].astype(str)
+
+print(len(bow_transformer.vocabulary_))
+pdt_bow = bow_transformer.transform(Train_all['prodtext'])
+print('Shape of sparse matrix:',pdt_bow.shape)
+print('Amount of Non - zero occurence:',pdt_bow.nnz)
+print('sparsity',(100*pdt_bow.nnz/(pdt_bow.shape[0]*pdt_bow.shape[1])))
+
+#from sklearn.feature_extraction.text import TfidfTransformer
+
+pdt_tit4 = Train['prodtext'][4]
+bow_t4 = bow_transformer.transform([pdt_tit4])
+#bow_t4
+
+
+tfidf_transformer = TfidfTransformer().fit(pdt_bow)
+tfidf_transformer4 = tfidf_transformer.transform(bow_t4)
+print(tfidf_transformer4)
+# Transform entire bag of words into TFIDF
+
+pdt_idf = tfidf_transformer.transform(pdt_bow)
+print(pdt_idf.shape)
+
+#Naive bayes model
+
+#from sklearn.naive_bayes import MultinomialNB
+
+search_rel = MultinomialNB(alpha = 0.1).fit(pdt_idf,Relevance_Train)
+search_rel.predict(tfidf_transformer4)[0]
+
+search_rel_all = search_rel.predict(pdt_idf)
+
+#classification matrix
+
+#from sklearn.metrics import classification_report
+
+#classification_report(Relevance_Train,search_rel_all)
+
+#Splitting Training and test sets
+start = datetime.now()  
+#from sklearn.cross_validation import train_test_split
+pdt_train,pdt_test,rel_train,rel_test = \
+train_test_split(Train_all['prodtext'],Relevance_Train,test_size = 0.25)
+
+print(len(pdt_train),len(pdt_test),len(rel_train)+len(rel_test))
+pdt_test
+
+#Creating Data Pipeline
+#from sklearn.pipeline import Pipeline
+start = datetime.now()
+
+pipeline = Pipeline([
+    ('bow',CountVectorizer()),
+    ('tfidf',TfidfTransformer()),
+    ('classifier',MultinomialNB()),])
+
+pipeline.fit(pdt_train,rel_train)
+
+predictions = pipeline.predict(pdt_test)
+
+print(classification_report(predictions,rel_test))
+
+print(datetime.now() - start)
